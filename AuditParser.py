@@ -17,18 +17,27 @@
 #
 # Converts MIR / Redline / IOCFinder raw XML audit output to tab-separated 
 # text suitable for importing into Excel and other tools.
-#
 
+#----------------------------------------------------------
+# Modified by l0gm0nk3y, l0gm0nk3y@comcast.net
+#
+# Tweaked it to handle HX collection files (*.mans)
+# Converts FireEye HX collection (*.mans) files to tab-separated
+# text suitable for importing into Excel and other tools.
+#
 import sys, datetime, time
 import csv
 import sys
 import os
+import json
 from datetime import datetime
-from time import strptime
 from optparse import OptionParser
 from lxml import etree
 
 ### Global Variables ###
+
+#7zip command
+UnzipCmd = None
 
 # Dictionary of XML elements to parse from each audit type
 d = {}
@@ -55,6 +64,7 @@ d['FileDownloadHistoryItem'] = ['Profile', 'BrowserName', 'BrowserVersion', 'use
 d['CookieHistoryItem'] = ['Profile', 'BrowserName', 'BrowserVersion', 'Username', 'FileName', 'FilePath', 'CookiePath', 'CookieName', 'CookieValue', 'CreationDate', 'ExpirationDate' 'LastAccessedDate', 'LastModifiedDate']
 d['SystemInfoItem'] = ['machine', 'totalphysical', 'availphysical', 'uptime', 'OS', 'OSbitness', 'hostname', 'date', 'user', 'domain', 'processor', 'patchLevel', 'buildNumber', 'procType', 'productID', 'productName', 'regOrg', 'regOwner', 'installDate' , 'MAC', 'timezoneDST', 'timezoneStandard', 'networkArray']
 d['PersistenceItem'] = ['PersistenceType', 'ServiceName', 'RegPath', 'RegText', 'RegOwner', 'RegModified', 'ServicePath', 'serviceDLL', 'arguments', 'FilePath', 'FileOwner', 'FileCreated', 'FileModified', 'FileAccessed', 'FileChanged', 'SignatureExists', 'SignatureVerified', 'SignatureDescription', 'CertificateSubject', 'CertificateIssuer', 'md5sum']
+d['eventItem'] = ['timestamp', 'eventType', 'details']
 # TODO: Add parsing for Disk and System Restore Point audits
 
 
@@ -170,7 +180,7 @@ def parseXML(inFile,outFile):
 						for j in elem.find(i).iter(tag="groupname"):
 							groupList.append(j.text)
 						separator = " | "
-						row.append(separator.join(groupList))
+						row.append(separator.join(groupList).encode("utf-8"))
 						
 					# Special case for nested RecordData within DNS Cache audit results
 					elif((elem.find(i).tag == "RecordData") and (elem.tag == "DnsEntryItem")): 
@@ -178,7 +188,7 @@ def parseXML(inFile,outFile):
 						for j in elem.find(i).iter():
 							if(j.tag != "RecordData"): recordList.append(j.tag + " : " + (j.text or ""))
 						separator = " | "
-						row.append(separator.join(recordList))
+						row.append(separator.join(recordList).encode("utf-8"))
 				
 					# Special case for nested DigSig data within HookItem audit results
 					elif((elem.find(i).tag == "DigitalSignatureHooking" or elem.find(i).tag =="DigitalSignatureHooked") and (elem.tag == "HookItem")):
@@ -186,7 +196,7 @@ def parseXML(inFile,outFile):
 						for j in elem.find(i).iter():
 							if(j.tag != "DigitalSignatureHooking" and j.tag != "DigitalSignatureHooked"): digSigList.append(j.tag + " : " + (j.text or ""))
 						separator = " | "
-						row.append(separator.join(digSigList))
+						row.append(separator.join(digSigList).encode("utf-8"))
 					
 					# Special case for nested ActionList within Task audit results
 					elif((elem.find(i).tag == "ActionList") and (elem.tag == "TaskItem")): 
@@ -194,7 +204,16 @@ def parseXML(inFile,outFile):
 						for j in elem.find(i).iter():
 							if(j.tag != "Action" and j.tag != "ActionList"): actionList.append(j.tag + " : " + (j.text or ""))
 						separator = " | "
-						row.append(separator.join(actionList))
+						row.append(separator.join(actionList).encode("utf-8"))
+
+					# Special case for nested details within eventItem (stateinspection) audit results
+					elif ((elem.find(i).tag == "details") and (elem.tag == "eventItem")):
+						detailList = []
+						for j in elem.find(i).iter():
+							if (j.tag != "detail" and j.tag != "details"): detailList.append(
+								j.tag + " : " + (j.text or ""))
+						separator = " | "
+						row.append(separator.join(detailList).encode("utf-8"))
 
 					elif((elem.find(i).tag == "message") and (elem.tag == "EventLogItem")): 
 						
@@ -216,6 +235,7 @@ def parseXML(inFile,outFile):
 			# Commit row to tab-delim file
 			writer.writerow(row)
 			if(doTimeline) and (currentAudit == "FileItem") or \
+			((currentAudit == "eventItem") and (startTime <= elem.find("timestamp").text) and  (endTime >= elem.find("timestamp").text)) or \
 			((currentAudit == "RegistryItem") and (startTime <= elem.find("Modified").text) and (endTime >= elem.find("Modified").text)) or \
 			((currentAudit == "RegistryItem") and (startTime <= elem.find("Modified").text) and (endTime >= elem.find("Modified").text)) or \
 			((currentAudit == "EventLogItem") and (startTime <= elem.find("genTime").text) and (endTime >= elem.find("genTime").text)) or \
@@ -353,7 +373,7 @@ def buildTimeline(elem):
 		timelineData[-1].addTimeDesc("Modified")
 		if (elem.find("Text") is not None) and (elem.find("Text").text is not None):
 			timelineData[-1].addEntry("Text",elem.find("Text").text.encode("utf-8"))
-		if elem.find("Username") is not None:
+		if elem.find("Username").text is not None:
 			timelineData[-1].addUser(elem.find("Username").text.encode("utf-8"))
 	
 	# Case 3: Event log item timeline object
@@ -397,7 +417,24 @@ def buildTimeline(elem):
 			timelineData.append(timelineEntry(elem.find("Created").text, elem.tag, "ApplicationFullPath", elem.find("ApplicationFullPath").text))
 			timelineData[-1].addTimeDesc("Created")
 			timelineData[-1].addEntry("FullPath", elem.find("FullPath").text)
-			
+
+	elif(elem.tag == "eventItem"):
+		#strip 100 of second off timestamp
+		ntsamp = elem.find("timestamp").text[:-5]
+		ntsamp = ntsamp + 'Z'
+
+		timelineData.append(timelineEntry(ntsamp, elem.tag, "eventType", elem.find("eventType").text))
+		timelineData[-1].addTimeDesc("timestamp")
+
+		#Parse subtree elements for timeline
+		detailList = []
+		for j in elem.find("details").iter():
+			if (j.tag != "detail" and j.tag != "details"):
+				detailList.append(j.tag + " : " + (j.text or ""))
+				detailList.append(j.tag + " : " + (j.text or ""))
+			separator = " | "
+			timelineData[-1].addEntry("details", separator.join(detailList))
+
 # Prints timeline to tab delimited text
 def printTimeline(timelineFile):
 	
@@ -417,66 +454,109 @@ def printTimeline(timelineFile):
 			writer.writerow(i.getTimelineRow())
 			
 	timelineFileHandle.close()
-	
+
 def main():
-	
-	# Handle arguments
-	parser = OptionParser()
-	parser.add_option("-i", "--input", help="XML input directory (req). NO TRAILING SLASHES", action="store", type="string", dest="inPath")
-	parser.add_option("-o", "--output", help="Output directory (req). NO TRAILING SLASHES", action="store", type="string", dest="outPath")
-	parser.add_option("-t", "--timeline", help="Build timeline, requires --starttime and --endtime", action="store_true", dest="doTimeline")
-	parser.add_option("--starttime", help="Start time, format yyyy-mm-ddThh:mm:ssZ", action="store", type="string", dest="startTime")
-	parser.add_option("--endtime", help="End time, format yyyy-mm-ddThh:mm:ssZ", action="store", type="string", dest="endTime")
-	(options, args) = parser.parse_args()
 
-	if(len(sys.argv) < 3) or  (not options.inPath) or (not options.outPath): 
-		parser.print_help()
-		sys.exit(-1)
-	
-	global startTime
-	global endTime
-	global doTimeline
-	inPath = options.inPath
-	outPath = options.outPath
-	doTimeline = options.doTimeline or False
-	startTime = options.startTime
-	endTime = options.endTime
-		
-	# Ensure user supplies time ranges for timeline option
-	if options.doTimeline and (not options.startTime or not options.endTime):
-		print "Timeline option requires --starttime and --endtime\n"
-		parser.print_help()
-		sys.exit(-1)
+    if UnzipCmd is None:
+		print "You must add the path to 7zip at line 38!"
+		exit(1)
 
-	# Normalize input paths
-	if not inPath.endswith(os.path.sep):
-		inPath += os.path.sep
-	
-	if not outPath.endswith(os.path.sep):
-		outPath += os.path.sep
+    # Handle arguments
+    parser = OptionParser()
 
-	# Iterate through and parse each input file
-	for filename in os.listdir(inPath):
-		
-		#Simple match on filename to avoid having to open and parse initial XML to determine doctype
-		if (filename.find("issues") is -1) and (filename.find(".xml") is not -1) and (filename.find("BatchResults") is -1):
+    parser.add_option("-m", "--mans", help="HX .mans file", action="store",
+                      type="string", dest="mans")
+    parser.add_option("-o", "--output", help="Output directory (req). NO TRAILING SLASHES", action="store",
+                      type="string", dest="outPath")
+    parser.add_option("-t", "--timeline", help="Build timeline, requires --starttime and --endtime",
+                      action="store_true", dest="doTimeline")
+    parser.add_option("--starttime", help="Start time, format yyyy-mm-ddThh:mm:ssZ", action="store", type="string",
+                      dest="startTime")
+    parser.add_option("--endtime", help="End time, format yyyy-mm-ddThh:mm:ssZ", action="store", type="string",
+                      dest="endTime")
+    (options, args) = parser.parse_args()
 
-			inFile = inPath + filename	
-			outFile = outPath + filename+".txt"
-			
-			# Parse XML into delimited text
-			print "Parsing input file: " + inFile
-	
-			if (filename.find("persistence") > 0): parsePersistence(inFile, outFile)
-			elif (filename.find("prefetch") > 0): parsePrefetch(inFile, outFile)
-			else: parseXML(inFile,outFile)
-	
-		#else: print "No more input XML files to parse!"
-		
-	# Output timeline (if option enabled) once we're done processing
-	if(doTimeline): 
-		print "Outputting timeline: " + outPath + "timeline.txt"
-		printTimeline(outPath+"timeline.txt")
+
+    if (len(sys.argv) < 3) or (not options.mans) or (not options.outPath):
+        parser.print_help()
+        sys.exit(-1)
+
+    global startTime
+    global endTime
+    global doTimeline
+    #inPath = options.inPath
+    inMans = options.mans
+    outPath = options.outPath
+    doTimeline = doTimeline = options.doTimeline or False
+    startTime = options.startTime
+    endTime = options.endTime
+
+    #Slip in HX Mans handling
+    wdir = os.path.dirname(inMans)
+    wfile =  os.path.basename(inMans)
+
+    inPath = wdir + '/' + wfile + "_unzip"
+    try:
+        os.stat(inPath)
+    except:
+        os.mkdir(inPath)
+
+    os.chdir(inPath)
+    cmd = "%s e %s" % (UnzipCmd, inMans)
+    print cmd
+    os.system(cmd)
+
+    manifest = json.loads(open(inPath + "/manifest.json").read())
+    for a in manifest['audits']:
+        id  = a["id"]
+        generator = a["generator"]
+        for p in a["results"]:
+            payload = p["payload"]
+            type = p["type"]
+
+            if "issues" not in type:
+                os.rename(inPath + "/" + payload, inPath + "/" + generator + ".xml")
+
+    #### Continue with AuditParser
+    # Ensure user supplies time ranges for timeline option
+    if options.doTimeline and (not options.startTime or not options.endTime):
+        print "Timeline option requires --starttime and --endtime\n"
+        parser.print_help()
+        sys.exit(-1)
+
+    # Normalize input paths
+    if not inPath.endswith(os.path.sep):
+        inPath += os.path.sep
+
+    if not outPath.endswith(os.path.sep):
+        outPath += os.path.sep
+
+    # Iterate through and parse each input file
+    for filename in os.listdir(inPath):
+
+        # Simple match on filename to avoid having to open and parse initial XML to determine doctype
+        if (filename.find("issues") is -1) and (filename.find(".xml") is not -1) and (
+            filename.find("BatchResults") is -1):
+
+            inFile = inPath + filename
+            outFile = outPath + filename + ".txt"
+
+            # Parse XML into delimited text
+            print "Parsing input file: " + inFile
+
+            if (filename.find("persistence") > 0):
+                parsePersistence(inFile, outFile)
+            elif (filename.find("prefetch") > 0):
+                parsePrefetch(inFile, outFile)
+            else:
+                parseXML(inFile, outFile)
+
+            # else: print "No more input XML files to parse!"
+
+    # Output timeline (if option enabled) once we're done processing
+    if (doTimeline):
+        print "Outputting timeline: " + outPath + "timeline.txt"
+        printTimeline(outPath + "timeline.txt")
 
 if __name__ == "__main__":
 	main()

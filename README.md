@@ -1,3 +1,13 @@
+#Modified 
+Written by l0gm0nk3y
+
+Tweaked this parser to handle FireEye HX collection (*.mans) files.
+
+The only thing that changes is the type of input.  This version expects
+a .mans file instead of a directory containing Redline audit results.
+
+See Step 2 below.
+
 # AuditParser.py
 Written by Ryan Kazanciyan at Mandiant
 
@@ -32,7 +42,7 @@ disable, or change settings for each audit modules as desired.
 Run Audit Parser against the directory containing your IOC Finder or
 Redline audit results:
 
-AuditParser.py -i input_path -o output_path
+AuditParser.py -m *.mans -o output_path
 
 * Supplied paths must not have trailing slashes
 * input_path should contain the XML output files from IOC Finder or Redline
@@ -93,3 +103,4 @@ results.
 * mir.w32tasks : Task Listing
 * mir.w32useraccounts : User Accounts
 * mir.w32volumes : Volume Listing
+* mir.stateagentinspector : HX State Agent Inspector 
